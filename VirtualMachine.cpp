@@ -10,10 +10,17 @@
 #include "Machine.h"
 
 #define VM_THREAD_PRIORITY_IDLE 0
+#define MAX_LENGTH 512
 
 extern "C" {
 
   using namespace std;
+
+  class MemoryPool {
+
+    TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM;
+
+  };
 
   class TCB {
 
@@ -841,6 +848,8 @@ extern "C" {
   TVMStatus VMMemoryPoolCreate(void *base, TVMMemorySize size, TVMMemoryPoolIDRef memory)
   {
 
+    
+
     return VM_STATUS_SUCCESS;
 
   }
@@ -848,7 +857,7 @@ extern "C" {
   TVMStatus VMStart(int tickms, TVMMemorySize heapsize, TVMMemorySize sharedsize, int argc, char *argv[])
   {
 
-    sharedmem = (void*)malloc(sharedsize * sizeof(TVMMemorySize));
+    sharedmem = (void*)malloc(sharedsize * sizeof(char));
 
     glbl_tickms = tickms;
 
@@ -896,11 +905,10 @@ extern "C" {
 
     TCB* thread = (TCB*)calldata;
 
-    thread->fileCallData = result;
+    if(result > 0)
+      thread->fileCallData = result;
 
     thread->state = VM_THREAD_STATE_READY;
-
-    curThread->fileCallFlag = 0;
 
     MachineResumeSignals(&sigstate);
 
@@ -914,6 +922,8 @@ extern "C" {
     TMachineSignalState sigstate;
 
     MachineSuspendSignals(&sigstate);
+
+    curThread->fileCallFlag = 0;
 
     if (newoffset != NULL)
       *newoffset = offset;
@@ -938,6 +948,7 @@ extern "C" {
 
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
+    curThread->fileCallFlag = 0;
 
     MachineFileClose(filedescriptor, fileCallback, curThread);
 
@@ -956,6 +967,7 @@ extern "C" {
 
     MachineSuspendSignals(&sigstate);
 
+    curThread->fileCallFlag = 0;
     if (filename == NULL || filedescriptor == NULL)
       return VM_STATUS_ERROR_INVALID_PARAMETER;
 
@@ -980,18 +992,36 @@ extern "C" {
 
     MachineSuspendSignals(&sigstate);
 
+    curThread->fileCallFlag = 0;
     if (length == NULL || data == NULL)
       return VM_STATUS_ERROR_INVALID_PARAMETER;
 
-    memcpy(sharedmem, data, (size_t)*length);
+    if(*length > MAX_LENGTH)
+    {
 
-    MachineFileWrite(filedescriptor, sharedmem, *length, fileCallback, curThread);
+      int *tmp;
+
+      memcpy((char*)sharedmem, (char*)data, MAX_LENGTH);
+      MachineFileWrite(filedescriptor, (char*)sharedmem, MAX_LENGTH, fileCallback, curThread);
+      curThread->state = VM_THREAD_STATE_WAITING;
+
+      Scheduler(false);
+
+      *tmp = *length - MAX_LENGTH;
+
+      VMFileWrite(filedescriptor, data, tmp);
+
+    }
+
+    memcpy((char*)sharedmem, (char*)data, (size_t)(*length));
+
+    MachineFileWrite(filedescriptor, (char*)sharedmem, *length, fileCallback, curThread);
 
     curThread->state = VM_THREAD_STATE_WAITING;
 
-    MachineResumeSignals(&sigstate);
-
     Scheduler(false);
+
+    MachineResumeSignals(&sigstate);
 
     return VM_STATUS_SUCCESS;
 
@@ -1003,19 +1033,40 @@ extern "C" {
     TMachineSignalState sigstate;
 
     MachineSuspendSignals(&sigstate);
+    curThread->fileCallFlag = 0;
 
     if (length == NULL || data == NULL)
       return VM_STATUS_ERROR_INVALID_PARAMETER;
 
-    MachineFileRead(filedescriptor, sharedmem, *length, fileCallback, curThread);
+    if(*length > MAX_LENGTH)
+    {
+
+      MachineFileRead(filedescriptor, (char*)sharedmem, MAX_LENGTH, fileCallback, curThread);
+      curThread->state = VM_THREAD_STATE_WAITING;
+
+      Scheduler(false);
+
+      if(curThread->fileCallData > 0)
+        *length = curThread->fileCallData;
+
+      memcpy((char*)data, (((char*)sharedmem)), MAX_LENGTH);
+
+      *length = *length - MAX_LENGTH;
+
+      VMFileRead(filedescriptor, data, length);
+
+    }
+
+    MachineFileRead(filedescriptor, (char*)sharedmem, *length, fileCallback, curThread);
 
     curThread->state = VM_THREAD_STATE_WAITING;
 
     Scheduler(false);
 
-    //*length = curThread->fileCallData;
+    if(curThread->fileCallData > 0)
+      *length = curThread->fileCallData;
 
-    memcpy(data, sharedmem, (size_t)*length);
+    memcpy((char*)sharedmem, (char*)data, (size_t)(*length));
 
     MachineResumeSignals(&sigstate);
 
