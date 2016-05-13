@@ -996,9 +996,10 @@ extern "C" {
     if (length == NULL || data == NULL)
       return VM_STATUS_ERROR_INVALID_PARAMETER;
 
-    int *tmp = length;
+    int tmp = *length;
 
-    while(*tmp > MAX_LENGTH)
+    //cout << *length << endl;
+    while(tmp > MAX_LENGTH)
     {
 
       memcpy((char*)sharedmem, (char*)data, MAX_LENGTH);
@@ -1007,7 +1008,7 @@ extern "C" {
 
       Scheduler(false);
 
-      *tmp = *tmp - MAX_LENGTH;
+      tmp = tmp - MAX_LENGTH;
 
       continue;
 
@@ -1015,7 +1016,7 @@ extern "C" {
 
     memcpy((char*)sharedmem, (char*)data, (size_t)(*length));
 
-    MachineFileWrite(filedescriptor, (char*)sharedmem, *length, fileCallback, curThread);
+    MachineFileWrite(filedescriptor, (char*)sharedmem, tmp, fileCallback, curThread);
 
     curThread->state = VM_THREAD_STATE_WAITING;
 
@@ -1037,6 +1038,7 @@ extern "C" {
 
     if (length == NULL || data == NULL)
       return VM_STATUS_ERROR_INVALID_PARAMETER;
+
 
     int *tmp = length;
 
