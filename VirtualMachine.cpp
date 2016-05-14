@@ -1,7 +1,9 @@
 #include <iostream>
 #include <unistd.h>
+#include <list>
 #include <vector>
 #include <queue>
+#include <iterator>
 #include <stdint.h>
 #include <cstdlib>
 #include <memory.h>
@@ -12,13 +14,24 @@
 #define VM_THREAD_PRIORITY_IDLE 0
 #define MAX_LENGTH 512
 
-extern "C" {
+using namespace std;
 
-  using namespace std;
+extern "C" {
+  
+  class Block
+  {
+    public:
+      void *start;
+      TVMMemorySize size;
+      bool free;
+  };
 
   class MemoryPool {
-
-    TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM;
+    public:
+      TVMMemoryPoolID id;
+      void *mem;
+      TVMMemorySize size;
+      list<Block *> blocks;
 
   };
 
@@ -66,6 +79,8 @@ extern "C" {
 
   //shared memory
   void *sharedmem;
+  const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 0;
+  static vector<MemoryPool *> memoryPools;
 
   // keep track of total ticks
   volatile unsigned int ticksElapsed;
@@ -90,6 +105,31 @@ extern "C" {
   void Scheduler(bool activate);
   void idle(void *param);
   void printThreadInfo();
+  void printBlocks(MemoryPool *mempool);
+  
+  void printBlocks(MemoryPool *mempool)
+  {
+    for (vector<MemoryPool *>::iterator itr = memoryPools.begin(); itr != memoryPools.end(); itr++)
+    {
+      if (mempool != NULL)
+      {
+        if ((*itr)->id == mempool->id)
+        {
+          list<Block *> blocks = (*itr)->blocks;
+          cout << endl;
+          cout << "MemPool id: " << (*itr)->id << endl;
+          for (list<Block *>::iterator itr2 = blocks.begin(); itr2 != blocks.end(); itr2++)
+          {
+            cout << "start: " << (*itr2)->start << ", ";
+            cout << "size: " << (*itr2)->size << ", ";
+            cout << "free: " << (*itr2)->free << endl;
+          }
+          cout << endl;
+        }
+      }
+
+    }
+  }
 
   void printThreadInfo()
   {
@@ -826,6 +866,60 @@ extern "C" {
 
   TVMStatus VMMemoryPoolAllocate(TVMMemoryPoolID memory, TVMMemorySize size, void **pointer)
   {
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+
+    TVMMemorySize trueSize;
+    if ((size % 64) == 0)
+    {
+      trueSize = size;
+    }
+    else
+    {
+      cout << "should round up here" << endl;
+      trueSize = size;
+    }
+
+    //cout << endl;
+    //cout << endl << "id: " << memory << endl;
+    //cout << "size: " << size << endl;
+    //cout << "trueSize: " << trueSize << endl;
+
+    for (vector<MemoryPool *>::iterator itr = memoryPools.begin(); itr != memoryPools.end(); itr++)
+    {
+      if ((*itr)->id == memory)
+      {
+        //cout << "found id: " << (*itr)->id << endl;
+        list<Block *> *blocks = &(*itr)->blocks;
+        //printBlocks(*itr);
+        //for (list<Block *>::iterator itr2 = blocks.begin(); itr2 != blocks.end(); itr2++)
+        for (auto itr2 = blocks->begin(); itr2 != blocks->end(); itr2++)
+        {
+          //cout << "size: " << (*itr2)->size << endl;
+          //cout << "trueSize: " << trueSize << endl;
+          //cout << "free: " << (*itr2)->free << endl;
+          //cout << "freetrue?: " << ((*itr2)->free == true) << endl;
+          if (((*itr2)->free == true) && ((*itr2)->size >= trueSize))
+          {
+            Block *free = (*itr2);
+            Block *block = new Block();
+            block->start = free->start;
+            block->size = trueSize;
+            block->free = false;
+            free->start = (char *)free->start + trueSize;
+            free->size = free->size - trueSize;
+
+            blocks->insert(itr2, block);
+
+            *pointer = block->start;
+
+          }
+        }
+        //printBlocks(*itr);
+      }
+    }
+
+    MachineResumeSignals(&sigstate);
 
     return VM_STATUS_SUCCESS;
 
@@ -833,6 +927,33 @@ extern "C" {
 
   TVMStatus VMMemoryPoolQuery(TVMMemoryPoolID memory, TVMMemorySizeRef bytesleft)
   {
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+
+    TVMMemorySize sizeLeft = 0;
+
+    for (vector<MemoryPool *>::iterator itr = memoryPools.begin(); itr != memoryPools.end(); itr++)
+    {
+      if ((*itr)->id == memory)
+      {
+        //printBlocks(*itr);
+        //cout << "found id: " << (*itr)->id << endl;
+        list<Block *> *blocks = &(*itr)->blocks;
+        //printBlocks(*itr);
+        //for (list<Block *>::iterator itr2 = blocks.begin(); itr2 != blocks.end(); itr2++)
+        for (auto itr2 = blocks->begin(); itr2 != blocks->end(); itr2++)
+        {
+          if ((*itr2)->free == true)
+          {
+            sizeLeft += (*itr2)->size;
+          }
+        }
+      }
+    }
+
+    *bytesleft = sizeLeft;
+    
+    MachineResumeSignals(&sigstate);
 
     return VM_STATUS_SUCCESS;
 
@@ -847,8 +968,28 @@ extern "C" {
 
   TVMStatus VMMemoryPoolCreate(void *base, TVMMemorySize size, TVMMemoryPoolIDRef memory)
   {
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
 
-    
+    MemoryPool *memPool = new MemoryPool;
+    memPool->id = memoryPools.size();
+    memPool->size = size;
+    memPool->mem = base;
+
+    Block *block = new Block();
+    block->start = base;
+    block->size = size;
+    block->free = true;
+    memPool->blocks.push_back(block);
+    memoryPools.push_back(memPool);
+
+    *memory = memPool->id;
+
+    //cout << endl;
+    //cout << "memPool id: " << memPool->id << endl;
+    //cout << "memory id: " <<  *memory << endl;
+
+    MachineResumeSignals(&sigstate);
 
     return VM_STATUS_SUCCESS;
 
@@ -856,8 +997,22 @@ extern "C" {
 
   TVMStatus VMStart(int tickms, TVMMemorySize heapsize, TVMMemorySize sharedsize, int argc, char *argv[])
   {
+    //cout << "heapsize: " << heapsize << endl;
+    //cout << "sharedsize: " << sharedsize << endl;
+    // create system memory pool
+    MemoryPool *systemMemoryPool = new MemoryPool;
+    systemMemoryPool->id = VM_MEMORY_POOL_ID_SYSTEM;
+    systemMemoryPool->mem = (char *)malloc(heapsize * sizeof(char));
+    systemMemoryPool->size = heapsize;
 
-    sharedmem = (void*)malloc(sharedsize * sizeof(char));
+    // create free block of memory
+    Block *block = new Block();
+    block->start = systemMemoryPool->mem;
+    block->size = heapsize;
+    block->free = true;
+    systemMemoryPool->blocks.push_back(block);
+
+    memoryPools.push_back(systemMemoryPool);
 
     glbl_tickms = tickms;
 
@@ -866,8 +1021,23 @@ extern "C" {
 
     if(main_entry != NULL)
     {
+      // create shared memory pool
+      MemoryPool *sharedMemoryPool = new MemoryPool;
+      sharedMemoryPool->id = memoryPools.size();
+      sharedMemoryPool->mem = (char *)MachineInitialize(sharedsize);
+      sharedMemoryPool->size = sharedsize;
 
-      sharedmem = MachineInitialize(sharedsize);
+      // create free block of memory
+      Block *block = new Block();
+      block->start = sharedMemoryPool->mem;
+      block->size = sharedsize;
+      block->free = true;
+      sharedMemoryPool->blocks.push_back(block);
+
+      memoryPools.push_back(sharedMemoryPool);
+
+      sharedmem = memoryPools[1]->mem;
+      
       MachineRequestAlarm(tickms*1000, AlarmCall, NULL);
       MachineEnableSignals();   
 
