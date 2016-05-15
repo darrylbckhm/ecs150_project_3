@@ -859,6 +859,60 @@ extern "C" {
 
   TVMStatus VMMemoryPoolDeallocate(TVMMemoryPoolID memory, void *pointer)
   {
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+
+    
+    for (vector<MemoryPool *>::iterator itr = memoryPools.begin(); itr != memoryPools.end(); itr++)
+    {
+      if ((*itr)->id == memory)
+      {
+        list<Block *> *blocks = &(*itr)->blocks;
+        bool erase = false;
+        auto itr3 = blocks->begin();
+        for (auto itr2 = blocks->begin(); itr2 != blocks->end(); itr2++)
+        {
+          if ((*itr2)->start == pointer)
+          {
+            Block *currentBlock = *itr2;
+            Block *nextBlock = *next(itr2);
+            Block *prevBlock = *prev(itr2);
+
+            currentBlock->free = true;
+
+            if (itr2 != prev(blocks->end()))
+            {
+              if (nextBlock->free == true)
+              {
+                //nextBlock->start = currentBlock->start;
+                nextBlock->size = currentBlock->size + nextBlock->size;
+                //blocks->erase(itr2);
+              }
+            }
+
+            if (itr2 != blocks->begin())
+            {
+              if (prevBlock->free == true)
+              {
+                prevBlock->size = currentBlock->size + prevBlock->size;
+                //blocks->erase(itr2);
+                erase = true;
+                itr3 = itr2;
+              }
+            }
+            
+            
+          }
+        }
+
+        if (erase)
+          blocks->erase(itr3);
+
+      }
+    }
+     
+
+    MachineResumeSignals(&sigstate);
 
     return VM_STATUS_SUCCESS;
 
@@ -915,6 +969,13 @@ extern "C" {
 
           }
         }
+
+        auto itr2 = prev(blocks->end());
+        if ((*itr2)->size == 0)
+        {
+          blocks->erase(itr2);
+        }
+
         //printBlocks(*itr);
       }
     }
@@ -961,6 +1022,25 @@ extern "C" {
 
   TVMStatus VMMemoryPoolDelete(TVMMemoryPoolID memory)
   {
+    TMachineSignalState sigstate;
+    MachineSuspendSignals(&sigstate);
+
+    bool found = false;
+    vector<MemoryPool *>::iterator itr2 = memoryPools.begin();
+    for (vector<MemoryPool *>::iterator itr = memoryPools.begin(); itr != memoryPools.end(); itr++)
+    {
+      if ((*itr)->id == memory)
+      {
+        found = true;
+        itr2 = itr;
+      }
+    }
+
+    if (found)
+      memoryPools.erase(itr2);
+    
+    MachineResumeSignals(&sigstate);
+     
 
     return VM_STATUS_SUCCESS;
 
