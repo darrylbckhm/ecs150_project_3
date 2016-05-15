@@ -81,6 +81,7 @@ extern "C" {
   void *sharedmem;
   const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 0;
   static vector<MemoryPool *> memoryPools;
+  static volatile unsigned int system_memory_pool_size;
 
   // keep track of total ticks
   volatile unsigned int ticksElapsed;
@@ -923,6 +924,26 @@ extern "C" {
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
 
+    int found = 0;
+
+    if(size > system_memory_pool_size)
+    {
+      
+      MachineResumeSignals(&sigstate);
+
+      return VM_STATUS_ERROR_INSUFFICIENT_RESOURCES;
+
+    }
+
+    if(size == 0 || pointer == NULL)
+    {
+
+      MachineResumeSignals(&sigstate);
+
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+
+    }
+
     TVMMemorySize trueSize;
     if ((size % 64) == 0)
     {
@@ -930,7 +951,7 @@ extern "C" {
     }
     else
     {
-      cout << "should round up here" << endl;
+      //cout << "should round up here" << endl;
       trueSize = size;
     }
 
@@ -943,6 +964,7 @@ extern "C" {
     {
       if ((*itr)->id == memory)
       {
+        found = 1;
         //cout << "found id: " << (*itr)->id << endl;
         list<Block *> *blocks = &(*itr)->blocks;
         //printBlocks(*itr);
@@ -980,6 +1002,15 @@ extern "C" {
       }
     }
 
+    if(!found)
+    {
+
+      MachineResumeSignals(&sigstate);
+
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+
+    } 
+
     MachineResumeSignals(&sigstate);
 
     return VM_STATUS_SUCCESS;
@@ -991,12 +1022,24 @@ extern "C" {
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
 
+    if(bytesleft == NULL)
+    {
+
+      MachineResumeSignals(&sigstate);
+
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+
+    }
+
+    int found = 0;
+
     TVMMemorySize sizeLeft = 0;
 
     for (vector<MemoryPool *>::iterator itr = memoryPools.begin(); itr != memoryPools.end(); itr++)
     {
       if ((*itr)->id == memory)
       {
+        found = 1;
         //printBlocks(*itr);
         //cout << "found id: " << (*itr)->id << endl;
         list<Block *> *blocks = &(*itr)->blocks;
@@ -1013,7 +1056,16 @@ extern "C" {
     }
 
     *bytesleft = sizeLeft;
-    
+
+    if(!found)
+    {
+
+      MachineResumeSignals(&sigstate);
+
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+
+    } 
+
     MachineResumeSignals(&sigstate);
 
     return VM_STATUS_SUCCESS;
@@ -1051,6 +1103,15 @@ extern "C" {
     TMachineSignalState sigstate;
     MachineSuspendSignals(&sigstate);
 
+    if(base == NULL || size == 0 || memory == NULL)
+    {
+      
+      MachineResumeSignals(&sigstate);
+
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+
+    }
+
     MemoryPool *memPool = new MemoryPool;
     memPool->id = memoryPools.size();
     memPool->size = size;
@@ -1084,6 +1145,7 @@ extern "C" {
     systemMemoryPool->id = VM_MEMORY_POOL_ID_SYSTEM;
     systemMemoryPool->mem = (char *)malloc(heapsize * sizeof(char));
     systemMemoryPool->size = heapsize;
+    system_memory_pool_size = heapsize;
 
     // create free block of memory
     Block *block = new Block();
