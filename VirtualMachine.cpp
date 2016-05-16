@@ -505,6 +505,8 @@ extern "C" {
     thread->state = VM_THREAD_STATE_DEAD;
     thread->entry =  entry;
     thread->param = param;
+    VMMemoryPoolAllocate(0, thread->memsize, (void **)&(thread->stackAddr));
+    MachineContextCreate(&(thread->mcntx), skeleton, thread, thread->stackAddr, thread->memsize);
 
     threads.push_back(thread);
 
@@ -646,12 +648,7 @@ extern "C" {
       {
 
         found = 1;
-        size_t stacksize = (*itr)->memsize;
-        cout << stacksize << endl;
-        (*itr)->stackAddr = new char[(*itr)->memsize];
-        //VMMemoryPoolAllocate(VM_MEMORY_POOL_ID_SYSTEM, stacksize, (void **)&(*itr)->stackAddr);
 
-        MachineContextCreate(&(*itr)->mcntx, skeleton, *itr, (*itr)->stackAddr, stacksize);
         (*itr)->state = VM_THREAD_STATE_READY;
       }
     }
@@ -956,7 +953,11 @@ extern "C" {
 
     int found = 0;
 
-    if(size > memoryPools[0]->size)
+    TVMMemorySize bytesleft = 0;
+
+    VMMemoryPoolQuery(VM_MEMORY_POOL_ID_SYSTEM, &bytesleft);
+
+    if(size > bytesleft)
     {
       
       MachineResumeSignals(&sigstate);
@@ -1362,13 +1363,13 @@ extern "C" {
 
     int tmp = *length;
     int numWrites = 0;
-
+    //VMMemoryPoolAllocate(0, MAX_LENGTH, (void **)((char*)sharedmem));
     while(tmp > MAX_LENGTH)
     {
 
-      memcpy((char*)sharedmem, (char*)data + (MAX_LENGTH * numWrites), MAX_LENGTH);
+      memcpy((char*)sharedmem + (curThread->threadID * MAX_LENGTH), (char*)data + (MAX_LENGTH * numWrites), MAX_LENGTH);
 
-      MachineFileWrite(filedescriptor, (char*)sharedmem, MAX_LENGTH, fileCallback, curThread);
+      MachineFileWrite(filedescriptor, (char*)sharedmem + (curThread->threadID * MAX_LENGTH), MAX_LENGTH, fileCallback, curThread);
 
       curThread->state = VM_THREAD_STATE_WAITING;
 
@@ -1380,9 +1381,9 @@ extern "C" {
 
     }
 
-    memcpy((char*)sharedmem, (char*)data + (MAX_LENGTH * numWrites), (size_t)(tmp));
+    memcpy((char*)sharedmem + (curThread->threadID * MAX_LENGTH), (char*)data + (MAX_LENGTH * numWrites), (size_t)(tmp));
 
-    MachineFileWrite(filedescriptor, (char*)sharedmem, tmp, fileCallback, curThread);
+    MachineFileWrite(filedescriptor, (char *)sharedmem + (curThread->threadID * MAX_LENGTH), tmp, fileCallback, curThread);
 
     curThread->state = VM_THREAD_STATE_WAITING;
 
@@ -1407,11 +1408,11 @@ extern "C" {
 
 
     int *tmp = length;
-
+    //VMMemoryPoolAllocate(0, MAX_LENGTH, (void **)((char*)sharedmem));
     while(*tmp > MAX_LENGTH)
     {
     
-      MachineFileRead(filedescriptor, (char*)sharedmem, MAX_LENGTH, fileCallback, curThread);
+      MachineFileRead(filedescriptor, (char*)sharedmem + (curThread->threadID * MAX_LENGTH), MAX_LENGTH, fileCallback, curThread);
       curThread->state = VM_THREAD_STATE_WAITING;
 
       Scheduler(false);
@@ -1419,7 +1420,7 @@ extern "C" {
       if(curThread->fileCallData > 0)
         *length = curThread->fileCallData;
 
-      memcpy((char*)data, (((char*)sharedmem)), MAX_LENGTH);
+      memcpy((char*)data, ((char*)sharedmem + (curThread->threadID * MAX_LENGTH)), MAX_LENGTH);
 
       *tmp = *tmp - MAX_LENGTH;
 
@@ -1427,7 +1428,7 @@ extern "C" {
 
     }
 
-    MachineFileRead(filedescriptor, (char*)sharedmem, *length, fileCallback, curThread);
+    MachineFileRead(filedescriptor, (char*)sharedmem + (curThread->threadID * MAX_LENGTH), *length, fileCallback, curThread);
 
     curThread->state = VM_THREAD_STATE_WAITING;
 
@@ -1436,7 +1437,7 @@ extern "C" {
     if(curThread->fileCallData > 0)
       *length = curThread->fileCallData;
 
-    memcpy((char*)data, (char*)sharedmem, (size_t)(*length));
+    memcpy((char*)data, (char*)sharedmem + (curThread->threadID * MAX_LENGTH), (size_t)(*length));
 
     MachineResumeSignals(&sigstate);
 
