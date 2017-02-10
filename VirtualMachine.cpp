@@ -1363,7 +1363,7 @@ extern "C" {
 
     int tmp = *length;
     int numWrites = 0;
-    //VMMemoryPoolAllocate(0, MAX_LENGTH, (void **)((char*)sharedmem));
+
     while(tmp > MAX_LENGTH)
     {
 
@@ -1408,7 +1408,7 @@ extern "C" {
 
 
     int *tmp = length;
-    //VMMemoryPoolAllocate(0, MAX_LENGTH, (void **)((char*)sharedmem));
+
     while(*tmp > MAX_LENGTH)
     {
     
